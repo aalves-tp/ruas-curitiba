@@ -46,18 +46,22 @@ let lastTry=0;
 async function load(p){
   if(busy||Date.now()-lastTry<8000)return;
   busy=true;lastTry=Date.now();
-  const q=`[out:json][timeout:15];way(around:350,${p.lat},${p.lon})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out body geom;`;
+  const q=`[out:json][timeout:20];way(around:300,${p.lat},${p.lon})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out body geom;`;
   let err='';
-  for(const u of EP){
-    try{
-      const c=new AbortController(),t=setTimeout(()=>c.abort(),12000);
-      const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q),signal:c.signal});
-      clearTimeout(t);
-      if(!r.ok){err='servidor do mapa ocupado ('+r.status+')';continue}
-      const j=await r.json();
-      ways=j.elements.filter(e=>e.geometry);fetchAt=p;err=ways.length?'':'mapa sem ruas neste ponto';
-      break;
-    }catch(e){err='sem conexão com o mapa ('+(e.name||'erro')+')'}
+  $('hint').textContent='carregando mapa…';
+  try{
+    const j=await Promise.any(EP.map(async u=>{
+      const c=new AbortController(),t=setTimeout(()=>c.abort(),25000);
+      try{
+        const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q),signal:c.signal});
+        if(!r.ok)throw new Error('http '+r.status);
+        return await r.json();
+      }finally{clearTimeout(t)}
+    }));
+    ways=j.elements.filter(e=>e.geometry);fetchAt=p;err=ways.length?'':'mapa sem ruas neste ponto';
+  }catch(e){
+    const m=(e.errors||[e]).map(x=>x.message||x.name).join(' | ');
+    err='mapa indisponível: '+m;
   }
   $('hint').textContent=err;busy=false;
   if(!err&&cur)update(cur,hd);
