@@ -127,9 +127,24 @@ function render(r){
   $('hint').textContent=r.lanes?'':(r.nl>1?'Faixas sem detalhe no mapa':'');
 }
 
+function nearest(p){
+  let b=null;
+  for(const w of ways){const g=w.geometry.map(q=>xy(q,p));
+    for(let i=0;i<g.length-1;i++){
+      const a=g[i],c=g[i+1],dx=c[0]-a[0],dy=c[1]-a[1],L2=dx*dx+dy*dy||1;
+      const t=Math.max(0,Math.min(1,-(a[0]*dx+a[1]*dy)/L2));
+      const d=Math.hypot(a[0]+t*dx,a[1]+t*dy);
+      if(d<40&&(!b||d<b.d))b={w,d};
+    }}
+  return b&&b.w;
+}
 function update(p,h){
-  if(h==null){$('hint').textContent='Mova-se para detectar a direção';return}
   if(!fetchAt||Math.hypot(...xy(p,fetchAt))>80)load(p);
+  if(h==null){
+    const w=nearest(p);
+    $('cur').innerHTML=w?nm(w)+'<small>mova-se para ver ruas transversais e faixas</small>':'Localizando rua…<small>mova-se para detectar a direção</small>';
+    $('cross').innerHTML='';$('lanes').innerHTML='';return;
+  }
   render(analyze(p,h));
 }
 
