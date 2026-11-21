@@ -1,19 +1,139 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ruas de Curitiba</title>
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ruas">
+<title>Ruas</title>
 <style>
-body{font-family:Arial,sans-serif;margin:0;padding:2rem;background:#f4f6f8;color:#222}
-main{max-width:900px;margin:auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
-h1{margin-top:0}
-</style>
-</head>
-<body>
-<main>
-<h1>Ruas de Curitiba</h1>
-<p>Conteúdo original do arquivo <code>ruas.html</code>.</p>
-</main>
-</body>
-</html>
+:root{--bg:#000;--fg:#fff;--bar:#e4e4e4;--ink:#000;--mut:#8a8a8a}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18px -apple-system,system-ui,sans-serif}
+#app{height:100%;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 14px env(safe-area-inset-bottom)}
+#lanes{display:flex;justify-content:center;gap:6px;min-height:84px;padding-top:10px;align-items:stretch}
+.lane{flex:0 0 58px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0;font-size:28px;line-height:1}
+.lane small{font-size:10px;margin-top:4px;font-weight:600}
+.s{background:#1f7a3a}.o{background:#9a7b00}.m{background:#b3261e}.n{background:#333}
+#hint{text-align:center;color:var(--mut);font-size:13px;min-height:18px;padding-top:4px}
+#cross{flex:1;position:relative;display:flex;flex-direction:column-reverse;gap:14px;padding:12px 0;overflow:hidden}
+#cross::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:16px;margin-left:-8px;background:var(--bar);border-radius:3px}
+.row{position:relative;height:54px;flex:none}
+.bar{position:absolute;top:10px;height:34px;background:var(--bar);border-radius:3px}
+.row.L .bar{left:0;right:50%}.row.R .bar{left:50%;right:0}.row.C .bar{left:0;right:0}
+.t{position:absolute;top:10px;height:34px;display:flex;align-items:center;gap:8px;color:var(--ink);padding:0 10px;max-width:50%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:16px}
+.row.L .t{left:0}.row.R .t{right:0;flex-direction:row-reverse}
+.row.C .t{left:50%;transform:translateX(-50%);max-width:100%;background:var(--bar);border-radius:3px}
+.t i{font-style:normal;font-weight:500;font-size:12px;opacity:.65}
+#cur{text-align:center;font-size:26px;padding:12px 0 18px;line-height:1.15}
+#cur small{display:block;color:var(--mut);font-size:13px;font-weight:500;margin-top:6px}
+</style></head>
+<body><div id="app">
+<div id="lanes"></div><div id="hint"></div>
+<div id="cross"></div>
+<div id="cur">Buscando GPS…</div>
+</div>
+<script>
+const $=id=>document.getElementById(id),R=6371000,rad=Math.PI/180;
+const xy=(p,o)=>[(p.lon-o.lon)*rad*R*Math.cos(o.lat*rad),(p.lat-o.lat)*rad*R];
+const brg=(a,b)=>Math.atan2(b[0]-a[0],b[1]-a[1])/rad;
+const nd=a=>((a%360)+540)%360-180;
+const nm=w=>w.tags.name||w.tags.ref||'';
+const ARW={left:'←',slight_left:'↖',sharp_left:'↰',right:'→',slight_right:'↗',sharp_right:'↱',through:'↑',none:'↑',reverse:'↶',merge_to_left:'↖',merge_to_right:'↗'};
+let ways=[],fetchAt=null,prev=null,hd=null,busy=false,cur=null;
+
+async function load(p){
+  if(busy)return;busy=true;
+  const q=`[out:json][timeout:15];way(around:350,${p.lat},${p.lon})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out body geom;`;
+  try{
+    const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:'data='+encodeURIComponent(q)});
+    const j=await r.json();ways=j.elements.filter(e=>e.geometry);fetchAt=p;
+  }catch(e){$('hint').textContent='Sem conexão com o mapa'}
+  busy=false;
+}
+
+function lanesOf(w,dir){
+  const t=w.tags,ow=t.oneway==='yes'||t.oneway==='-1';
+  const key=ow?'turn:lanes':(dir>0?'turn:lanes:forward':'turn:lanes:backward');
+  const s=t[key]||(ow?null:t['turn:lanes']);
+  if(!s)return null;
+  return s.split('|').map(x=>{
+    const a=(x||'none').split(';');
+    const th=a.includes('through')||a.includes('none');
+    const oth=a.filter(z=>z!=='through'&&z!=='none');
+    return{a,k:oth.length?(th?'o':'m'):'s'};
+  });
+}
+
+function analyze(p,h){
+  let best=null;
+  for(const w of ways){
+    const g=w.geometry.map(q=>xy(q,p));
+    for(let i=0;i<g.length-1;i++){
+      const a=g[i],b=g[i+1],dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1;
+      const t=Math.max(0,Math.min(1,-(a[0]*dx+a[1]*dy)/L2));
+      const d=Math.hypot(a[0]+t*dx,a[1]+t*dy);
+      const df=Math.abs(nd(brg(a,b)-h)),dir=df<50?1:df>130?-1:0;
+      if(!dir||d>35)continue;
+      const ow=w.tags.oneway;
+      if((ow==='yes'||w.tags.junction==='roundabout')&&dir<0)continue;
+      if(ow==='-1'&&dir>0)continue;
+      if(!best||d<best.d)best={w,g,i,dir,d};
+    }
+  }
+  if(!best)return null;
+  const {w,g,dir}=best,found={};
+  const idx=[];
+  if(dir>0)for(let k=best.i+1;k<g.length;k++)idx.push(k);else for(let k=best.i;k>=0;k--)idx.push(k);
+  let acc=0,pos=[0,0];
+  for(const k of idx){
+    acc+=Math.hypot(g[k][0]-pos[0],g[k][1]-pos[1]);pos=g[k];
+    if(acc>300)break;
+    const id=w.nodes[k];
+    for(const v of ways){
+      if(v===w||!nm(v)||nm(v)===nm(w))continue;
+      const j=v.nodes.indexOf(id);if(j<0)continue;
+      const vg=v.geometry.map(q=>xy(q,p)),vo=v.tags.oneway;
+      let side='C';
+      if(vo==='yes'||vo==='-1'){
+        let a,b;
+        if(vo==='yes'){if(j<vg.length-1){a=vg[j];b=vg[j+1]}else{a=vg[j-1];b=vg[j]}}
+        else{if(j>0){a=vg[j];b=vg[j-1]}else{a=vg[j+1];b=vg[j]}}
+        side=nd(brg(a,b)-h)>0?'R':'L';
+      }
+      const n=nm(v);
+      if(!found[n]||found[n].d>acc)found[n]={n,side,d:acc};
+    }
+  }
+  return{name:nm(w),ref:w.tags.ref,cross:Object.values(found).sort((a,b)=>a.d-b.d).slice(0,5),lanes:lanesOf(w,dir),nl:w.tags.lanes};
+}
+
+function render(r){
+  if(!r){$('cur').innerHTML='Sem rua detectada<small>mova-se para calibrar a direção</small>';$('cross').innerHTML='';$('lanes').innerHTML='';return}
+  $('cur').innerHTML=r.name+(r.nl?`<small>${r.nl} faixa${r.nl>1?'s':''}</small>`:'');
+  $('cross').innerHTML=r.cross.map(c=>`<div class="row ${c.side}"><div class="bar"></div><div class="t">${c.n}<i>${Math.round(c.d/10)*10} m</i></div></div>`).join('');
+  $('lanes').innerHTML=r.lanes?r.lanes.map(l=>`<div class="lane ${l.k}">${l.a.map(x=>ARW[x]||'?').join('')}<small>${{s:'reto',o:'reto ou virar',m:'só virar'}[l.k]}</small></div>`).join(''):'';
+  $('hint').textContent=r.lanes?'':(r.nl>1?'Faixas sem detalhe no mapa':'');
+}
+
+function update(p,h){
+  if(h==null){$('hint').textContent='Mova-se para detectar a direção';return}
+  if(!fetchAt||Math.hypot(...xy(p,fetchAt))>80)load(p);
+  render(analyze(p,h));
+}
+
+function onPos(pos){
+  const c=pos.coords,p={lat:c.latitude,lon:c.longitude};
+  if(c.heading!=null&&!isNaN(c.heading)&&(c.speed||0)>1)hd=c.heading;
+  else if(prev){const d=xy(p,prev);if(Math.hypot(...d)>6){hd=brg([0,0],d)}}
+  if(!prev||Math.hypot(...xy(p,prev))>6)prev=p;
+  cur=p;update(p,hd);
+}
+
+const q=new URLSearchParams(location.search);
+if(q.get('lat')){ // modo teste: ?lat=-25.43&lon=-49.27&h=90
+  const p={lat:+q.get('lat'),lon:+q.get('lon')};load(p).then(()=>update(p,+q.get('h')||0));
+}else if(navigator.geolocation){
+  navigator.geolocation.watchPosition(onPos,e=>{$('cur').textContent='Permita a localização para o Safari'},{enableHighAccuracy:true,maximumAge:1000});
+  if('wakeLock' in navigator)navigator.wakeLock.request('screen').catch(()=>{});
+}
+</script></body></html>
