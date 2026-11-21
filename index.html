@@ -41,14 +41,26 @@ const nm=w=>w.tags.name||w.tags.ref||'';
 const ARW={left:'←',slight_left:'↖',sharp_left:'↰',right:'→',slight_right:'↗',sharp_right:'↱',through:'↑',none:'↑',reverse:'↶',merge_to_left:'↖',merge_to_right:'↗'};
 let ways=[],fetchAt=null,prev=null,hd=null,busy=false,cur=null;
 
+const EP=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
+let lastTry=0;
 async function load(p){
-  if(busy)return;busy=true;
+  if(busy||Date.now()-lastTry<8000)return;
+  busy=true;lastTry=Date.now();
   const q=`[out:json][timeout:15];way(around:350,${p.lat},${p.lon})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out body geom;`;
-  try{
-    const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:'data='+encodeURIComponent(q)});
-    const j=await r.json();ways=j.elements.filter(e=>e.geometry);fetchAt=p;
-  }catch(e){$('hint').textContent='Sem conexão com o mapa'}
-  busy=false;
+  let err='';
+  for(const u of EP){
+    try{
+      const c=new AbortController(),t=setTimeout(()=>c.abort(),12000);
+      const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q),signal:c.signal});
+      clearTimeout(t);
+      if(!r.ok){err='servidor do mapa ocupado ('+r.status+')';continue}
+      const j=await r.json();
+      ways=j.elements.filter(e=>e.geometry);fetchAt=p;err=ways.length?'':'mapa sem ruas neste ponto';
+      break;
+    }catch(e){err='sem conexão com o mapa ('+(e.name||'erro')+')'}
+  }
+  $('hint').textContent=err;busy=false;
+  if(!err&&cur)update(cur,hd);
 }
 
 function lanesOf(w,dir){
