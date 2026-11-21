@@ -31,7 +31,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18p
 <div id="lanes"></div><div id="hint"></div>
 <div id="cross"></div>
 <div id="cur">Buscando GPS…</div>
-<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v4</div>
+<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v5</div>
 </div>
 <script>
 const $=id=>document.getElementById(id),R=6371000,rad=Math.PI/180;
@@ -40,34 +40,79 @@ const brg=(a,b)=>Math.atan2(b[0]-a[0],b[1]-a[1])/rad;
 const nd=a=>((a%360)+540)%360-180;
 const nm=w=>w.tags.name||w.tags.ref||'';
 const ARW={left:'←',slight_left:'↖',sharp_left:'↰',right:'→',slight_right:'↗',sharp_right:'↱',through:'↑',none:'↑',reverse:'↶',merge_to_left:'↖',merge_to_right:'↗'};
-let ways=[],fetchAt=null,prev=null,hd=null,busy=false,cur=null;
+let ways=[],prev=null,hd=null,cur=null;
 
-const EP=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
-let lastTry=0;
-async function load(p){
-  if(busy||Date.now()-lastTry<8000)return;
-  busy=true;lastTry=Date.now();
-  const q=`[out:json][timeout:20];way(around:300,${p.lat},${p.lon})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out body geom;`;
-  let err='';
-  $('hint').textContent='carregando mapa…';
+const EP=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.openstreetmap.fr/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+const T=0.005,M=0.0008,KEEP=['name','ref','oneway','junction','highway','lanes','turn:lanes','turn:lanes:forward','turn:lanes:backward'];
+const tw={},loading={},failAt={};
+let lastK='';
+const tk=(i,j)=>i+'_'+j;
+const status=m=>{$('dbg').textContent='v5 · '+new Date().toLocaleTimeString()+' · '+m};
+const slim=e=>({id:e.id,nodes:e.nodes,geometry:e.geometry.map(q=>({lat:q.lat,lon:q.lon})),tags:Object.fromEntries(KEEP.filter(k=>e.tags&&e.tags[k]!=null).map(k=>[k,e.tags[k]]))});
+
+function rebuild(i,j){
+  const m=new Map();
+  for(const k in tw){
+    const [a,b]=k.split('_').map(Number);
+    if(Math.abs(a-i)>3||Math.abs(b-j)>3){delete tw[k];continue}
+    if(Math.abs(a-i)<=1&&Math.abs(b-j)<=1)for(const w of tw[k])m.set(w.id,w);
+  }
+  ways=[...m.values()];
+}
+function store(k,arr){
   try{
-    const j=await Promise.any(EP.map(async u=>{
-      const c=new AbortController(),t=setTimeout(()=>c.abort(),25000);
+    const idx=JSON.parse(localStorage.getItem('rt:idx')||'[]').filter(x=>x!==k);idx.push(k);
+    while(idx.length>40)localStorage.removeItem('rt:'+idx.shift());
+    localStorage.setItem('rt:'+k,JSON.stringify(arr));
+    localStorage.setItem('rt:idx',JSON.stringify(idx));
+  }catch(e){}
+}
+function here(){return cur?[Math.floor(cur.lat/T),Math.floor(cur.lon/T)]:null}
+
+async function loadTile(i,j){
+  const k=tk(i,j);
+  if(tw[k]||loading[k]||Date.now()-(failAt[k]||0)<4000)return;
+  try{
+    const c=localStorage.getItem('rt:'+k);
+    if(c){tw[k]=JSON.parse(c);const h=here()||[i,j];rebuild(h[0],h[1]);status('cache local, '+ways.length+' vias');if(cur)update(cur,hd);return}
+  }catch(e){}
+  loading[k]=1;
+  const S=i*T-M,W=j*T-M,N=(i+1)*T+M,E=(j+1)*T+M;
+  const q=`[out:json][timeout:25];way(${S},${W},${N},${E})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out body geom;`;
+  if(!ways.length)$('hint').textContent='carregando mapa…';
+  try{
+    const res=await Promise.any(EP.map(async u=>{
+      const c=new AbortController(),t=setTimeout(()=>c.abort(),20000);
       try{
         const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q),signal:c.signal});
         if(!r.ok)throw new Error('http '+r.status);
         return await r.json();
       }finally{clearTimeout(t)}
     }));
-    ways=j.elements.filter(e=>e.geometry);fetchAt=p;err=ways.length?'':'mapa sem ruas neste ponto';
+    const arr=res.elements.filter(e=>e.geometry&&e.nodes).map(slim);
+    tw[k]=arr;store(k,arr);
+    const h=here()||[i,j];rebuild(h[0],h[1]);
+    $('hint').textContent=ways.length?'':'mapa sem ruas neste ponto';
+    status('mapa ok, '+ways.length+' vias');
+    if(cur)update(cur,hd);
   }catch(e){
-    const m=(e.errors||[e]).map(x=>x.message||x.name).join(' | ');
-    err='mapa indisponível: '+m;
+    failAt[k]=Date.now();
+    status('falhou: '+(e.errors||[e]).map(x=>x.message||x.name).join(' | '));
+    if(!ways.length)$('hint').textContent='mapa indisponível, tentando de novo…';
   }
-  $('hint').textContent=err;
-  $('dbg').textContent='v4 · '+new Date().toLocaleTimeString()+' · '+(err||('mapa ok, '+ways.length+' vias'));
-  busy=false;
-  if(!err&&cur)update(cur,hd);
+  delete loading[k];
+}
+
+function ensure(p){
+  const i=Math.floor(p.lat/T),j=Math.floor(p.lon/T),k=tk(i,j);
+  if(k!==lastK&&tw[k]){lastK=k;rebuild(i,j)}
+  loadTile(i,j);
+  if(!tw[k])return;
+  const ml=111320,mo=111320*Math.cos(p.lat*rad),dy=(p.lat-i*T)*ml,dx=(p.lon-j*T)*mo,D=150;
+  if(dy<D)loadTile(i-1,j);
+  if(T*ml-dy<D)loadTile(i+1,j);
+  if(dx<D)loadTile(i,j-1);
+  if(T*mo-dx<D)loadTile(i,j+1);
 }
 
 function lanesOf(w,dir){
@@ -146,7 +191,7 @@ function nearest(p){
   return b&&b.w;
 }
 function update(p,h){
-  if(!fetchAt||Math.hypot(...xy(p,fetchAt))>80)load(p);
+  ensure(p);
   if(h==null){
     const w=nearest(p);
     $('cur').innerHTML=w?nm(w)+'<small>mova-se para ver ruas transversais e faixas</small>':'Localizando rua…<small>mova-se para detectar a direção</small>';
@@ -165,7 +210,7 @@ function onPos(pos){
 
 const q=new URLSearchParams(location.search);
 if(q.get('lat')){ // modo teste: ?lat=-25.43&lon=-49.27&h=90
-  const p={lat:+q.get('lat'),lon:+q.get('lon')};load(p).then(()=>update(p,+q.get('h')||0));
+  const p={lat:+q.get('lat'),lon:+q.get('lon')};cur=p;hd=+q.get('h')||0;ensure(p);update(p,hd);
 }else if(navigator.geolocation){
   navigator.geolocation.watchPosition(onPos,e=>{$('cur').textContent='Permita a localização para o Safari'},{enableHighAccuracy:true,maximumAge:1000});
   if('wakeLock' in navigator)navigator.wakeLock.request('screen').catch(()=>{});
