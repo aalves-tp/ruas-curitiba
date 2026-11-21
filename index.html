@@ -30,7 +30,8 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18p
 <body><div id="app">
 <div id="lanes"></div><div id="hint"></div>
 <div id="cross"></div>
-<div id="cur">Buscando GPS…<small>versão 4</small></div>
+<div id="cur">Buscando GPS…</div>
+<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v4</div>
 </div>
 <script>
 const $=id=>document.getElementById(id),R=6371000,rad=Math.PI/180;
@@ -63,7 +64,9 @@ async function load(p){
     const m=(e.errors||[e]).map(x=>x.message||x.name).join(' | ');
     err='mapa indisponível: '+m;
   }
-  $('hint').textContent=err;busy=false;
+  $('hint').textContent=err;
+  $('dbg').textContent='v4 · '+new Date().toLocaleTimeString()+' · '+(err||('mapa ok, '+ways.length+' vias'));
+  busy=false;
   if(!err&&cur)update(cur,hd);
 }
 
