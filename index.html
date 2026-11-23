@@ -14,8 +14,8 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18p
 .lane{flex:1 1 0;max-width:86px;min-width:0;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 2px}
 .lane svg{width:100%;max-width:44px;height:auto}
 .lane small{font-size:11px;font-weight:700;margin-top:4px;letter-spacing:.3px;text-align:center;line-height:1.1}
-.s{background:#1f7a3a}.o{background:#9a7b00}.m{background:#b3261e}.n{background:#333}
-#hint{text-align:center;color:var(--mut);font-size:13px;min-height:18px;padding-top:4px}
+.e{background:#4a3f00;border:2px dashed #d4b000}.es{background:#173d24;border:2px dashed #2f9e55}.s{background:#1f7a3a}.o{background:#9a7b00}.m{background:#b3261e}.n{background:#333}
+#hint{text-align:center;color:var(--mut);font-size:14px;min-height:18px;padding-top:4px}
 #cross{flex:1;position:relative;display:flex;flex-direction:column-reverse;gap:16px;padding:12px 0;overflow:hidden}
 #cross::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:16px;margin-left:-8px;background:var(--bar);border-radius:3px}
 .row{position:relative;flex:none}
@@ -33,7 +33,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18p
 <div id="lanes"></div><div id="hint"></div>
 <div id="cross"></div>
 <div id="cur">Buscando GPS…</div>
-<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v6</div>
+<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v7</div>
 </div>
 <script>
 const $=id=>document.getElementById(id),R=6371000,rad=Math.PI/180;
@@ -49,7 +49,7 @@ const T=0.005,M=0.0008,KEEP=['name','ref','oneway','junction','highway','lanes',
 const tw={},loading={},failAt={};
 let lastK='';
 const tk=(i,j)=>i+'_'+j;
-const status=m=>{$('dbg').textContent='v6 · '+new Date().toLocaleTimeString()+' · '+m};
+const status=m=>{$('dbg').textContent='v7 · '+new Date().toLocaleTimeString()+' · '+m};
 const slim=e=>({id:e.id,nodes:e.nodes,geometry:e.geometry.map(q=>({lat:q.lat,lon:q.lon})),tags:Object.fromEntries(KEEP.filter(k=>e.tags&&e.tags[k]!=null).map(k=>[k,e.tags[k]]))});
 
 function rebuild(i,j){
@@ -117,19 +117,30 @@ function ensure(p){
   if(T*mo-dx<D)loadTile(i,j+1);
 }
 
-function lanesOf(w,dir){
+const kindOf=a=>{
+  const th=a.includes('through')||a.includes('none'),oth=a.filter(z=>z!=='through'&&z!=='none');
+  return oth.length?(th?'o':'m'):'s';
+};
+function lanesOf(w,dir,mv){
   const t=w.tags,ow=t.oneway==='yes'||t.oneway==='-1'||t.junction==='roundabout';
   const key=ow?'turn:lanes':(dir>0?'turn:lanes:forward':'turn:lanes:backward');
   const s=t[key]||(ow?null:t['turn:lanes']);
-  if(s)return{known:true,list:s.split('|').map(x=>{
-    const a=(x||'none').split(';');
-    const th=a.includes('through')||a.includes('none');
-    const oth=a.filter(z=>z!=='through'&&z!=='none');
-    return{a,k:oth.length?(th?'o':'m'):'s'};
+  let n=s?s.split('|').length:(ow?+t.lanes:+(dir>0?t['lanes:forward']:t['lanes:backward']));
+  if(!s&&!n&&!ow&&+t.lanes)n=Math.floor(+t.lanes/2);
+  if(!(n>=2))return null;
+  const mk=a=>({a,k:kindOf(a)});
+  try{
+    const u=JSON.parse(localStorage.getItem('ul:'+w.id+':'+dir)||'null');
+    if(u&&u.length===n)return{src:'user',list:u.map(mk)};
+  }catch(e){}
+  if(s)return{src:'osm',list:s.split('|').map(x=>mk((x||'none').split(';')))};
+  const cl=mv&&(mv.has('L')||mv.has('C')),cr=mv&&(mv.has('R')||mv.has('C'));
+  return{src:'est',list:Array.from({length:n},(_,i)=>{
+    const a=['through'];
+    if(i===0&&cl)a.unshift('left');
+    if(i===n-1&&cr)a.push('right');
+    return{a,k:a.length>1?'e':'es'};
   })};
-  let n=ow?+t.lanes:+(dir>0?t['lanes:forward']:t['lanes:backward']);
-  if(!n&&!ow&&+t.lanes)n=Math.floor(+t.lanes/2);
-  return n>=2?{known:false,list:Array.from({length:n},()=>({a:['through'],k:'n'}))}:null;
 }
 const P={through:['M20 52V14','M10 24L20 10L30 24'],left:['M22 52V34Q22 22 10 22H6','M15 13L5 22L15 31'],right:['M18 52V34Q18 22 30 22H34','M25 13L35 22L25 31'],slight_left:['M22 52V38L10 18','M10 28L9 14L22 18'],slight_right:['M18 52V38L30 18','M30 28L31 14L18 18'],reverse:['M30 52V24Q30 12 20 12Q10 12 10 24V30','M3 24L10 33L17 24']};
 P.sharp_left=P.left;P.sharp_right=P.right;P.none=P.through;P.merge_to_left=P.slight_left;P.merge_to_right=P.slight_right;
@@ -175,15 +186,20 @@ function analyze(p,h){
       if(!found[n]||found[n].d>acc)found[n]={n,side,d:acc};
     }
   }
-  return{name:nm(w),ref:w.tags.ref,cross:Object.values(found).sort((a,b)=>a.d-b.d).slice(0,5),lanes:lanesOf(w,dir),nl:w.tags.lanes};
+  const fl=Object.values(found).sort((a,b)=>a.d-b.d).slice(0,5);
+  const mv=new Set(fl.filter(c=>c.d<fl[0].d+30).map(c=>c.side));
+  return{name:nm(w),ref:w.tags.ref,cross:fl,lanes:lanesOf(w,dir,mv),wid:w.id,dir,nl:w.tags.lanes};
 }
 
+let lastR=null;
 function render(r){
+  lastR=r;
   if(!r){$('cur').innerHTML='Sem rua detectada<small>mova-se para calibrar a direção</small>';$('cross').innerHTML='';$('lanes').innerHTML='';return}
   $('cur').innerHTML=r.name+(r.nl?`<small>${r.nl} faixa${r.nl>1?'s':''}</small>`:'');
   $('cross').innerHTML=r.cross.map(c=>`<div class="row ${c.side}"><div class="nm"><span>${c.n}<i>${Math.round(c.d/10)*10} m</i></span></div><div class="bar"></div></div>`).join('');
-  $('lanes').innerHTML=r.lanes?r.lanes.list.map(l=>`<div class="lane ${l.k}">${icon(l.a)}<small>${{s:'RETO',o:'RETO / VIRAR',m:'SÓ VIRAR',n:'?'}[l.k]}</small></div>`).join(''):'';
-  $('hint').textContent=r.lanes&&!r.lanes.known?'faixas sem detalhe no mapa':'';
+  $('lanes').innerHTML=r.lanes?r.lanes.list.map((l,i)=>`<div class="lane ${l.k}" data-i="${i}">${icon(l.a)}<small>${{s:'RETO',o:'RETO / VIRAR',m:'SÓ VIRAR',e:'RETO / VIRAR (est.)',es:'RETO (est.)'}[l.k]}</small></div>`).join(''):'';
+  const src=r.lanes&&r.lanes.src;
+  $('hint').innerHTML=src==='est'?'faixas estimadas pelo cruzamento · toque numa faixa para corrigir':src==='user'?'ajustado por você · <u id="rst">apagar</u>':'';
 }
 
 function nearest(p){
@@ -197,6 +213,22 @@ function nearest(p){
     }}
   return b&&b.w;
 }
+const OPT=[['through'],['left','through'],['left'],['right','through'],['right']];
+const nk=a=>a.map(x=>x==='none'?'through':x).sort().join(';');
+$('lanes').addEventListener('click',e=>{
+  const el=e.target.closest('.lane');
+  if(!el||!lastR||!lastR.lanes||!cur)return;
+  const L=lastR.lanes.list.map(l=>l.a.map(x=>x==='none'?'through':x)),i=+el.dataset.i;
+  const idx=OPT.findIndex(o=>nk(o)===nk(L[i]));
+  L[i]=OPT[(idx+1)%OPT.length].slice();
+  try{localStorage.setItem('ul:'+lastR.wid+':'+lastR.dir,JSON.stringify(L))}catch(x){}
+  update(cur,hd);
+});
+$('hint').addEventListener('click',e=>{
+  if(e.target.id!=='rst'||!lastR)return;
+  try{localStorage.removeItem('ul:'+lastR.wid+':'+lastR.dir)}catch(x){}
+  if(cur)update(cur,hd);
+});
 function update(p,h){
   ensure(p);
   if(h==null){
