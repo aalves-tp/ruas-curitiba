@@ -15,7 +15,17 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18p
 .lane svg{width:100%;max-width:44px;height:auto}
 .lane small{font-size:11px;font-weight:700;margin-top:4px;letter-spacing:.3px;text-align:center;line-height:1.1}
 .e{background:#4a3f00;border:2px dashed #d4b000}.es{background:#173d24;border:2px dashed #2f9e55}.s{background:#1f7a3a}.o{background:#9a7b00}.m{background:#b3261e}.n{background:#333}
-#hint{text-align:center;color:var(--mut);font-size:14px;min-height:18px;padding-top:4px}
+#top{display:flex;align-items:center;gap:10px;min-height:66px;padding-top:6px}
+#hint{flex:1;text-align:center;color:var(--mut);font-size:14px;line-height:1.25}
+#comp{position:relative;width:58px;height:58px;flex:none;border:2px solid #555;border-radius:50%}
+#ring{position:absolute;inset:0;transition:transform .35s linear}
+#ring b{position:absolute;font-size:11px;color:#888;font-weight:700;line-height:1}
+#ring .n{top:3px;left:50%;transform:translateX(-50%);color:#ff453a}
+#ring .s{bottom:3px;left:50%;transform:translateX(-50%)}
+#ring .e{right:4px;top:50%;transform:translateY(-50%)}
+#ring .w{left:4px;top:50%;transform:translateY(-50%)}
+#pt{position:absolute;top:-10px;left:50%;margin-left:-6px;border:6px solid transparent;border-top:0;border-bottom:10px solid #fff}
+#cd{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700}
 #cross{flex:1;position:relative;display:flex;flex-direction:column-reverse;gap:16px;padding:12px 0;overflow:hidden}
 #cross::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:16px;margin-left:-8px;background:var(--bar);border-radius:3px}
 .row{position:relative;flex:none}
@@ -30,10 +40,11 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 18p
 #cur small{display:block;color:var(--mut);font-size:13px;font-weight:500;margin-top:6px}
 </style></head>
 <body><div id="app">
-<div id="lanes"></div><div id="hint"></div>
+<div id="lanes"></div>
+<div id="top"><div id="hint"></div><div id="comp"><div id="ring"><b class="n">N</b><b class="e">L</b><b class="s">S</b><b class="w">O</b></div><i id="pt"></i><span id="cd">–</span></div></div>
 <div id="cross"></div>
 <div id="cur">Buscando GPS…</div>
-<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v7</div>
+<div id="dbg" style="color:#666;font-size:11px;text-align:center;padding-bottom:8px;word-break:break-word">v8</div>
 </div>
 <script>
 const $=id=>document.getElementById(id),R=6371000,rad=Math.PI/180;
@@ -43,13 +54,29 @@ const nd=a=>((a%360)+540)%360-180;
 const nm=w=>w.tags.name||w.tags.ref||'';
 const ARW={left:'←',slight_left:'↖',sharp_left:'↰',right:'→',slight_right:'↗',sharp_right:'↱',through:'↑',none:'↑',reverse:'↶',merge_to_left:'↖',merge_to_right:'↗'};
 let ways=[],prev=null,hd=null,cur=null;
+let spd=0,gpsAcc=20,fixT=0,lastWay=null,rot=0;
+function setComp(h){
+  const d=nd(-h-rot);rot+=d;
+  $('ring').style.transform=`rotate(${rot}deg)`;
+  $('cd').textContent=['N','NE','L','SE','S','SO','O','NO'][Math.round(h/45)%8];
+}
+function setH(n){
+  const m=((n%360)+360)%360;
+  hd=hd==null?m:(hd+nd(m-hd)*0.6+360)%360;
+  setComp(hd);
+}
+function predict(p,h){ // compensa o atraso do GPS andando para frente na direcao atual
+  if(!(spd>2))return p;
+  const L=Math.min(spd*(0.5+(Date.now()-fixT)/1000),40);
+  return{lat:p.lat+Math.cos(h*rad)*L/R/rad,lon:p.lon+Math.sin(h*rad)*L/(R*Math.cos(p.lat*rad))/rad};
+}
 
 const EP=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.openstreetmap.fr/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
-const T=0.005,M=0.0008,KEEP=['name','ref','oneway','junction','highway','lanes','lanes:forward','lanes:backward','turn:lanes','turn:lanes:forward','turn:lanes:backward'];
+const T=0.005,M=0.0008,KEEP=['name','ref','oneway','junction','highway','bridge','tunnel','layer','lanes','lanes:forward','lanes:backward','turn:lanes','turn:lanes:forward','turn:lanes:backward'];
 const tw={},loading={},failAt={};
 let lastK='';
 const tk=(i,j)=>i+'_'+j;
-const status=m=>{$('dbg').textContent='v7 · '+new Date().toLocaleTimeString()+' · '+m};
+const status=m=>{$('dbg').textContent='v8 · '+new Date().toLocaleTimeString()+' · '+m};
 const slim=e=>({id:e.id,nodes:e.nodes,geometry:e.geometry.map(q=>({lat:q.lat,lon:q.lon})),tags:Object.fromEntries(KEEP.filter(k=>e.tags&&e.tags[k]!=null).map(k=>[k,e.tags[k]]))});
 
 function rebuild(i,j){
@@ -63,10 +90,10 @@ function rebuild(i,j){
 }
 function store(k,arr){
   try{
-    const idx=JSON.parse(localStorage.getItem('rt2:idx')||'[]').filter(x=>x!==k);idx.push(k);
-    while(idx.length>40)localStorage.removeItem('rt2:'+idx.shift());
-    localStorage.setItem('rt2:'+k,JSON.stringify(arr));
-    localStorage.setItem('rt2:idx',JSON.stringify(idx));
+    const idx=JSON.parse(localStorage.getItem('rt3:idx')||'[]').filter(x=>x!==k);idx.push(k);
+    while(idx.length>40)localStorage.removeItem('rt3:'+idx.shift());
+    localStorage.setItem('rt3:'+k,JSON.stringify(arr));
+    localStorage.setItem('rt3:idx',JSON.stringify(idx));
   }catch(e){}
 }
 function here(){return cur?[Math.floor(cur.lat/T),Math.floor(cur.lon/T)]:null}
@@ -75,7 +102,7 @@ async function loadTile(i,j){
   const k=tk(i,j);
   if(tw[k]||loading[k]||Date.now()-(failAt[k]||0)<4000)return;
   try{
-    const c=localStorage.getItem('rt2:'+k);
+    const c=localStorage.getItem('rt3:'+k);
     if(c){tw[k]=JSON.parse(c);const h=here()||[i,j];rebuild(h[0],h[1]);status('cache local, '+ways.length+' vias');if(cur)update(cur,hd);return}
   }catch(e){}
   loading[k]=1;
@@ -155,14 +182,16 @@ function analyze(p,h){
       const t=Math.max(0,Math.min(1,-(a[0]*dx+a[1]*dy)/L2));
       const d=Math.hypot(a[0]+t*dx,a[1]+t*dy);
       const df=Math.abs(nd(brg(a,b)-h)),dir=df<50?1:df>130?-1:0;
-      if(!dir||d>35)continue;
+      if(!dir||d>Math.max(30,Math.min(gpsAcc*1.2,60)))continue;
       const ow=w.tags.oneway;
       if((ow==='yes'||w.tags.junction==='roundabout')&&dir<0)continue;
       if(ow==='-1'&&dir>0)continue;
-      if(!best||d<best.d)best={w,g,i,dir,d};
+      const sc=d+Math.min(df,180-df)*0.3+(w.id===lastWay?-8:0);
+      if(!best||sc<best.sc)best={w,g,i,dir,d,sc};
     }
   }
   if(!best)return null;
+  lastWay=best.w.id;
   const {w,g,dir}=best,found={};
   const idx=[];
   if(dir>0)for(let k=best.i+1;k<g.length;k++)idx.push(k);else for(let k=best.i;k>=0;k--)idx.push(k);
@@ -170,9 +199,11 @@ function analyze(p,h){
   for(const k of idx){
     acc+=Math.hypot(g[k][0]-pos[0],g[k][1]-pos[1]);pos=g[k];
     if(acc>300)break;
+    if(acc<4)continue;
     const id=w.nodes[k];
     for(const v of ways){
       if(v===w||!nm(v)||nm(v)===nm(w))continue;
+      if(!!(v.tags.bridge||v.tags.tunnel)!==!!(w.tags.bridge||w.tags.tunnel)||(v.tags.layer||'0')!==(w.tags.layer||'0'))continue;
       const j=v.nodes.indexOf(id);if(j<0)continue;
       const vg=v.geometry.map(q=>xy(q,p)),vo=v.tags.oneway;
       let side='C';
@@ -236,22 +267,24 @@ function update(p,h){
     $('cur').innerHTML=w?nm(w)+'<small>mova-se para ver ruas transversais e faixas</small>':'Localizando rua…<small>mova-se para detectar a direção</small>';
     $('cross').innerHTML='';$('lanes').innerHTML='';return;
   }
-  render(analyze(p,h));
+  render(analyze(predict(p,h),h));
 }
 
 function onPos(pos){
   const c=pos.coords,p={lat:c.latitude,lon:c.longitude};
-  if(c.heading!=null&&!isNaN(c.heading)&&(c.speed||0)>1)hd=c.heading;
-  else if(prev){const d=xy(p,prev);if(Math.hypot(...d)>6){hd=brg([0,0],d)}}
+  gpsAcc=c.accuracy||20;spd=c.speed>0?c.speed:0;fixT=Date.now();
+  if(c.heading!=null&&!isNaN(c.heading)&&spd>1)setH(c.heading);
+  else if(prev){const d=xy(p,prev);if(Math.hypot(...d)>6)setH(brg([0,0],d))}
   if(!prev||Math.hypot(...xy(p,prev))>6)prev=p;
-  cur=p;update(p,hd);
+  cur=p;update(cur,hd);
 }
 
 const q=new URLSearchParams(location.search);
 if(q.get('lat')){ // modo teste: ?lat=-25.43&lon=-49.27&h=90
-  const p={lat:+q.get('lat'),lon:+q.get('lon')};cur=p;hd=+q.get('h')||0;ensure(p);update(p,hd);
+  const p={lat:+q.get('lat'),lon:+q.get('lon')};cur=p;hd=+q.get('h')||0;setComp(hd);ensure(p);update(p,hd);
 }else if(navigator.geolocation){
   navigator.geolocation.watchPosition(onPos,e=>{$('cur').textContent='Permita a localização para o Safari'},{enableHighAccuracy:true,maximumAge:1000});
+  setInterval(()=>{if(cur&&hd!=null&&spd>2)update(cur,hd)},400);
   if('wakeLock' in navigator)navigator.wakeLock.request('screen').catch(()=>{});
 }
 </script></body></html>
